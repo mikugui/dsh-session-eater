@@ -1,0 +1,193 @@
+/**
+ * 在 GitHub 上发一个 Release，并把打包产物作为附件挂上去。
+ * 走 REST API，**不需要 git**（这台机器上 github.com:443 不通，只能走 api.github.com）。
+ *
+ * 用法：
+ *   node scripts/release-github.mjs                    # 版本取 package.json，附件自动找
+ *   node scripts/release-github.mjs --tag v0.4.0 --dry-run
+ *   node scripts/release-github.mjs --assets D:\path\a.tgz,D:\path\b.zip
+ *
+ * 凭据：环境变量 GITHUB_TOKEN / GITHUB_OWNER，或 <工作区根>/.github-token（同上一个脚本）。
+ */
+import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs'
+import { join, dirname, basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const PACKAGE_ROOT = join(HERE, '..')
+const WORKSPACE_ROOT = join(PACKAGE_ROOT, '..')
+const API = 'https://api.github.com'
+const UPLOADS = 'https://uploads.github.com'
+
+const argv = process.argv.slice(2)
+const flag = (name) => argv.includes(name)
+const value = (name, fallback) => {
+  const at = argv.indexOf(name)
+  return at === -1 || argv[at + 1] === undefined ? fallback : argv[at + 1]
+}
+
+const pkg = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
+const TAG = value('--tag', `v${pkg.version}`)
+const DRY = flag('--dry-run')
+const REPO = value('--repo', pkg.name)
+
+const TOKEN_PATTERN = /(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{36}|[0-9a-f]{40})/
+
+/** 读凭据（与环境变量/凭据文件同一套规则）。 */
+function credentials() {
+  let token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
+  let owner = process.env.GITHUB_OWNER || ''
+  if (token === '') {
+    const file = join(WORKSPACE_ROOT, '.github-token')
+    if (!existsSync(file)) throw new Error(`没有令牌：把 token 写到 ${file}，或设 GITHUB_TOKEN。`)
+    const lines = readFileSync(file, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)
+      .map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('#'))
+    token = lines[0] ?? ''
+    owner = owner || (lines[1] ?? '')
+  }
+  const match = TOKEN_PATTERN.exec(token)
+  if (match !== null) token = match[0]
+  if (token === '') {
+    throw new Error(`凭据文件是空的：把 token 粘到 ${join(WORKSPACE_ROOT, '.github-token')}（只需这一行），或设 GITHUB_TOKEN。`)
+  }
+  if (!/^(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{36}|[0-9a-f]{40})$/.test(token)) {
+    throw new Error(`令牌形状可疑（长度 ${token.length}，前缀 "${token.slice(0, 11)}…"）：classic 应为 ghp_ + 36 字符。`)
+  }
+  return { token, owner }
+}
+
+/** JSON API 调用。 */
+async function api(token, method, path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'application/vnd.github+json',
+      'x-github-api-version': '2022-11-28',
+      'user-agent': 'dsh-session-eater-release',
+      ...(body === undefined ? {} : { 'content-type': 'application/json' })
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  })
+  const text = await res.text()
+  const json = text === '' ? null : (() => { try { return JSON.parse(text) } catch { return text } })()
+  if (!res.ok) {
+    const error = new Error(`${method} ${path} → ${res.status} ${json?.message ?? json}`)
+    error.status = res.status
+    error.detail = json
+    throw error
+  }
+  return json
+}
+
+/** 上传一个附件（走 uploads.github.com 的裸字节接口）。 */
+async function uploadAsset(token, owner, repo, releaseId, file) {
+  const bytes = readFileSync(file)
+  const res = await fetch(
+    `${UPLOADS}/repos/${owner}/${repo}/releases/${releaseId}/assets?name=${encodeURIComponent(basename(file))}`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'content-type': 'application/octet-stream',
+        'content-length': String(bytes.length),
+        'user-agent': 'dsh-session-eater-release'
+      },
+      body: bytes
+    }
+  )
+  const text = await res.text()
+  const json = text === '' ? null : (() => { try { return JSON.parse(text) } catch { return text } })()
+  if (!res.ok) {
+    const error = new Error(`上传附件 ${basename(file)} → ${res.status} ${json?.message ?? json}`)
+    error.status = res.status
+    error.detail = json
+    throw error
+  }
+  return json
+}
+
+/** 从 CHANGELOG 里抠出这个版本的段落当 release notes。 */
+function releaseNotes(version) {
+  const text = readFileSync(join(PACKAGE_ROOT, 'CHANGELOG.md'), 'utf8')
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => line.trim() === `## ${version}`)
+  if (start === -1) return `dsh-session-eater ${version}`
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((line) => line.startsWith('## '))
+  return rest.slice(0, end === -1 ? rest.length : end).join('\n').trim()
+}
+
+/** 找附件：优先命令行给的，否则在上一层目录里按版本找 tgz/zip。 */
+function findAssets() {
+  const explicit = value('--assets', '')
+  if (explicit !== '') return explicit.split(',').map((p) => p.trim()).filter(Boolean)
+  return readdirSync(WORKSPACE_ROOT)
+    .filter((name) => name.endsWith('.tgz') || name.endsWith('.zip'))
+    .filter((name) => name.includes(pkg.version))
+    .map((name) => join(WORKSPACE_ROOT, name))
+}
+
+const { token, owner: configuredOwner } = credentials()
+const user = await api(token, 'GET', '/user')
+const owner = configuredOwner || user.login
+const assets = findAssets().filter((file) => existsSync(file))
+
+console.log(`发布   : ${owner}/${REPO}  ${TAG}`)
+console.log(`身份   : ${user.login}`)
+console.log(`附件   : ${assets.length === 0 ? '(无)' : ''}`)
+for (const file of assets) console.log(`  ${basename(file)}  ${(statSync(file).size / 1024).toFixed(1)} KB`)
+if (DRY) {
+  console.log('\n--dry-run：不实际发布。')
+  process.exit(0)
+}
+
+// 1) 取 main 的 head，必要时打 tag
+const ref = await api(token, 'GET', `/repos/${owner}/${REPO}/git/ref/heads/${(await api(token, 'GET', `/repos/${owner}/${REPO}`)).default_branch}`)
+const headSha = ref.object.sha
+console.log(`目标提交: ${headSha.slice(0, 8)}`)
+
+let existingRelease = null
+try {
+  existingRelease = await api(token, 'GET', `/repos/${owner}/${REPO}/releases/tags/${TAG}`)
+  console.log(`已存在   : Release ${TAG}（将复用，附件缺失会补传）`)
+} catch (error) {
+  if (error.status !== 404) throw error
+}
+
+if (existingRelease === null) {
+  try {
+    await api(token, 'POST', `/repos/${owner}/${REPO}/git/refs`, { ref: `refs/tags/${TAG}`, sha: headSha })
+    console.log(`已打 tag : ${TAG} → ${headSha.slice(0, 8)}`)
+  } catch (error) {
+    if (error.status !== 422) throw error // 422 = tag 已存在
+    console.log(`tag 已存在: ${TAG}`)
+  }
+  existingRelease = await api(token, 'POST', `/repos/${owner}/${REPO}/releases`, {
+    tag_name: TAG,
+    name: `${pkg.name} ${TAG}`,
+    body: releaseNotes(pkg.version),
+    draft: false,
+    prerelease: false
+  })
+  console.log(`已发布   : ${existingRelease.html_url}`)
+}
+
+// 2) 传附件（已存在同名附件就跳过）
+const uploaded = new Set((existingRelease.assets ?? []).map((asset) => asset.name))
+for (const file of assets) {
+  const name = basename(file)
+  if (uploaded.has(name)) {
+    console.log(`跳过     : ${name}（已存在）`)
+    continue
+  }
+  const asset = await uploadAsset(token, owner, REPO, existingRelease.id, file)
+  console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB`)
+}
+
+const final = await api(token, 'GET', `/repos/${owner}/${REPO}/releases/tags/${TAG}`)
+console.log(`\n✅ Release: ${final.html_url}`)
+for (const asset of final.assets ?? []) {
+  console.log(`   ${asset.name}  →  ${asset.browser_download_url}`)
+}
