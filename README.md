@@ -314,6 +314,48 @@ puppeteer-core 直接复用 profile 里已有的那份，不额外装东西。
 
 ---
 
+## 维护者：怎么发版
+
+`scripts/` 下有两个脚本，**全程走 GitHub REST API，不依赖 git**
+（网络受限、或机器上根本没装 git 时尤其有用）：
+
+```powershell
+# 1) 推代码：把当前目录作为一个提交追加到远端 main 之上
+node scripts/publish-github.mjs --dry-run   # 先看会推哪些文件
+node scripts/publish-github.mjs             # 真推
+
+# 2) 发 Release：打 tag、写 release notes（自动取 CHANGELOG 里对应段落）、上传附件
+node scripts/release-github.mjs --dry-run
+node scripts/release-github.mjs             # 附件自动找上一层的 *-<version>.tgz / *.zip
+
+# 打包（发 Release 前先做）
+npm pack --pack-destination ..
+Compress-Archive -Path .\* -DestinationPath ..\dsh-session-eater-<version>.zip
+```
+
+**凭据**读取顺序：环境变量 `GITHUB_TOKEN` / `GITHUB_OWNER` → 工作区根目录的 `.github-token`。
+后者是两行文本（第 1 行 token，第 2 行用户名可选，`#` 开头是注释），建议存成 **UTF-8 带 BOM**，
+这样记事本打开不乱码。脚本会**用正则从整行里抠出令牌本体**，前后多粘了 `ghp_` / `github_` 之类
+前缀也能认出来；并会先做形状预检（classic 必须是 `ghp_` + 36 字符）再动网络。
+
+> ⚠️ **令牌请用 classic + 只勾 `repo`**。fine-grained 令牌**建不了仓库**
+> （`POST /user/repos` 会回 403 `Resource not accessible by personal access token`）。
+
+**发版清单**
+
+1. 改 `package.json` 的 `version`
+2. 在 `CHANGELOG.md` 顶部加 `## <version>` 段落（会被自动当作 release notes）
+3. `npm pack` + `Compress-Archive` 出两个产物
+4. `node scripts/publish-github.mjs`
+5. `node scripts/release-github.mjs`
+6. 删掉 `.github-token`，并去 GitHub 设置里把这个令牌 **Revoke**
+
+**关于提交历史**：`publish-github.mjs` 是在**远端 head 之上**建提交的，所以它产生的 SHA 和本地
+`git commit` 出来的不同（同内容、不同历史）。要么以后统一用脚本推，要么在网络正常时先
+`git fetch origin && git reset --hard origin/main` 把本地对齐，再用普通 `git push`。
+
+---
+
 ## 已知取舍
 
 - 只处理**左侧会话列表**里的常规会话行；工作区行（`projectRow`）拖不动，也不会被吃。
