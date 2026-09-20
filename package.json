@@ -15,8 +15,12 @@
   "type": "module",
   "main": "lib/index.js",
   "exports": {
-    ".": { "default": "./lib/index.js" },
-    "./client": { "default": "./lib/client.js" },
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -46,7 +50,9 @@
     "test:client": "node tests/verify-client.mjs",
     "test:settings": "node tests/verify-settings.mjs",
     "inspect": "node tests/inspect-sessions.mjs",
-    "filmstrip": "node tests/filmstrip.mjs 10"
+    "filmstrip": "node tests/filmstrip.mjs 10",
+    "test:market": "node tests/verify-market-entry.mjs",
+    "submit:market": "node scripts/submit-market.mjs"
   },
   "repository": {
     "type": "git",
