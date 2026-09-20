@@ -354,6 +354,38 @@ Compress-Archive -Path .\* -DestinationPath ..\dsh-session-eater-<version>.zip
 `git commit` 出来的不同（同内容、不同历史）。要么以后统一用脚本推，要么在网络正常时先
 `git fetch origin && git reset --hard origin/main` 把本地对齐，再用普通 `git push`。
 
+### 不需要令牌的发版路径（日常推荐）
+
+只要 `git` 能推（凭据交给 Git Credential Manager / GitHub Desktop 管），发版可以完全不碰 API：
+
+```powershell
+# 1) 改 package.json 的 version，在 CHANGELOG.md 顶部加 ## <version> 段落
+# 2) 打包
+npm pack --pack-destination ..
+Compress-Archive -Path .\* -DestinationPath ..\dsh-session-eater-<version>.zip
+# 3) 提交与 tag 一起推
+git add -A
+git commit -m "release: v<version>"
+git tag -a v<version> -m "dsh-session-eater v<version>"
+git push --follow-tags
+```
+
+4) 网页上发 Release：仓库页右侧 **Releases → Draft a new release** → 选刚推上去的 tag
+   → 正文粘 `CHANGELOG.md` 里那段 → 把上面两个产物拖进附件区 → **Publish release**。
+
+两个脚本的 `--dry-run` 都是**纯离线**的（不校验凭据、不发网络请求），可以先用它确认
+要推 / 要传哪些文件。`release-github.mjs --dry-run` 还会顺便打印它准备用的 release notes。
+
+> **网络提醒（在受限网络里实测得到）**：`github.com:443` 会**时通时断** ——
+> 同一台机器上出现过 `git push` / `curl` 连续 21 秒超时（`Failed to connect to github.com
+> port 443`），而 `api.github.com` 全程稳定。所以在这种环境里**优先用上面那两个 API 脚本**，
+> `git push` 只作为网络窗口好时的补充。判断方法很直接：
+>
+> ```powershell
+> curl.exe -4 -s -o NUL -w "%{http_code}`n" -m 20 https://github.com/     # 000 = 不通
+> Invoke-RestMethod https://api.github.com/rate_limit                    # 有响应 = 通
+> ```
+
 ---
 
 ## 已知取舍

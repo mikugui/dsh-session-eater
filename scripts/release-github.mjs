@@ -129,19 +129,22 @@ function findAssets() {
     .map((name) => join(WORKSPACE_ROOT, name))
 }
 
+const assets = findAssets().filter((file) => existsSync(file))
+
+console.log(`发布   : ${REPO}  ${TAG}（--repo 可覆写仓库名）`)
+console.log(`附件   : ${assets.length === 0 ? '(无)' : ''}`)
+for (const file of assets) console.log(`  ${basename(file)}  ${(statSync(file).size / 1024).toFixed(1)} KB`)
+console.log(`notes  : ${releaseNotes(pkg.version).split('\n')[0].slice(0, 60)}…`)
+if (DRY) {
+  // 同 publish 脚本：dry-run 不能要求凭据，否则"先看看"这件事本身就做不到。
+  console.log('\n--dry-run：只列附件与 release notes，不校验凭据、不发布。')
+  process.exit(0)
+}
+
 const { token, owner: configuredOwner } = credentials()
 const user = await api(token, 'GET', '/user')
 const owner = configuredOwner || user.login
-const assets = findAssets().filter((file) => existsSync(file))
-
-console.log(`发布   : ${owner}/${REPO}  ${TAG}`)
 console.log(`身份   : ${user.login}`)
-console.log(`附件   : ${assets.length === 0 ? '(无)' : ''}`)
-for (const file of assets) console.log(`  ${basename(file)}  ${(statSync(file).size / 1024).toFixed(1)} KB`)
-if (DRY) {
-  console.log('\n--dry-run：不实际发布。')
-  process.exit(0)
-}
 
 // 1) 取 main 的 head，必要时打 tag
 const ref = await api(token, 'GET', `/repos/${owner}/${REPO}/git/ref/heads/${(await api(token, 'GET', `/repos/${owner}/${REPO}`)).default_branch}`)

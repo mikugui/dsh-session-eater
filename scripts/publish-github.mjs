@@ -148,8 +148,6 @@ function collect(dir, base = dir, out = []) {
   return out
 }
 
-const { token, owner: configuredOwner } = credentials()
-assertTokenShape(token)
 const files = collect(PACKAGE_ROOT).sort((a, b) => a.path.localeCompare(b.path))
 const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
 
@@ -157,9 +155,14 @@ console.log(`仓库      : ${REPO}（${PRIVATE ? '私有' : '公开'}）`)
 console.log(`待上传    : ${files.length} 个文件, ${(totalBytes / 1024 / 1024).toFixed(2)} MB`)
 for (const file of files) console.log(`  ${file.path}  ${(file.size / 1024).toFixed(1)} KB`)
 if (DRY) {
-  console.log('\n--dry-run：不实际推送。')
+  // 注意：dry-run 必须在校验凭据**之前**返回 —— 否则没令牌就跑不了，
+  // 和"先看看会推哪些文件"这个用途自相矛盾（踩过一次）。
+  console.log('\n--dry-run：只列文件，不校验凭据、不推送。')
   process.exit(0)
 }
+
+const { token, owner: configuredOwner } = credentials()
+assertTokenShape(token)
 
 const user = await api(token, 'GET', '/user')
 const owner = configuredOwner || user.login
