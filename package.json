@@ -1,0 +1,60 @@
+{
+  "name": "dsh-session-eater",
+  "version": "0.4.0",
+  "description": "会话清理（喂鱼）：把「余额小胖鱼挂件」的形象放进左侧会话列表底部，把不要的会话拖到它身上就会被吃掉（移入回收站，可撤销）——拖近时张嘴，松手后删除该对话。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session",
+    "cleanup",
+    "trash",
+    "whale",
+    "balance-widget"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test:host": "node tests/verify-host.mjs",
+    "test:client": "node tests/verify-client.mjs",
+    "test:settings": "node tests/verify-settings.mjs",
+    "inspect": "node tests/inspect-sessions.mjs",
+    "filmstrip": "node tests/filmstrip.mjs 10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikugui/dsh-session-eater.git"
+  },
+  "homepage": "https://github.com/mikugui/dsh-session-eater#readme",
+  "bugs": {
+    "url": "https://github.com/mikugui/dsh-session-eater/issues"
+  },
+  "license": "MIT"
+}

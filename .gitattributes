@@ -1,0 +1,14 @@
+# 统一用 LF 存进仓库、检出也保持 LF，避免 Windows 上 CRLF 混进 diff
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp3 binary
+*.wav binary
+*.zip binary
+*.tgz binary
