@@ -187,6 +187,21 @@ __dshSessionEater.config() / setConfig({ size: 140 }) / resetConfig()
 想调动画就 `node tests/filmstrip.mjs 10` —— 它把一整个咀嚼周期按相位冻结成一张
 `docs/chew-cycle.png`，好不好看一眼就知道。
 
+想把这段动画**导出来做视频片头/封面**用 `node tests/loop.mjs [帧数]`（默认 18 帧 = 每帧 30ms）：
+
+| 产物 | 说明 |
+| --- | --- |
+| `docs/chew-loop.gif` | 原速循环 0.54s，**透明背景** |
+| `docs/chew-loop-slow.gif` | 3 倍慢 1.62s，做片头更好读 |
+| `docs/chew-loop-dark.gif` | 深色底（#0e1322）可直接拖进剪辑软件 |
+| `docs/chew-loop.webp` | 8 位 alpha，叠背景不会出 GIF 的锯齿边 |
+| `<工作区>/_loop-frames/` | 透明 PNG 序列，剪映/PR/AE 都能吃（不入库） |
+
+它和 `filmstrip.mjs` 同一套手法（拖拽武装 → 用负 `animation-delay` 把动画冻在周期里的
+不同相位），区别是逐帧单独截图。两个坑记在这：`omitBackground` **只去掉页面默认白底**，
+应用自己的背景层得用 `visibility:hidden` 藏掉；`html`/`body` 自己的 `background` 会直接画在
+canvas 上，必须显式设成透明 —— 否则导出的帧全是"看起来透明、其实贴了一层底色"。
+
 ---
 
 ## 文件
@@ -208,6 +223,8 @@ dsh-session-eater/
 │  ├─ peek-localstorage.mjs # 只读取证：直接从 Edge/WebView2 的 LevelDB 里读你存的配置
 │  ├─ fixtures/          # 测试用图（故意做成非正方形，专门验 contain 换算）
 │  ├─ filmstrip.mjs      # 把咀嚼周期按相位冻结成 contact sheet（调动画用）
+│  ├─ loop.mjs           # 导出循环动图（GIF/WebP + 透明 PNG 序列，做视频片头用）
+│  ├─ verify-market-entry.mjs # 投稿前自检：对照市场 CI 规则核 entry
 │  └─ hero.mjs           # 生成 README 效果图
 └─ docs/
    ├─ eating.png         # 真实尺寸下的投放区
@@ -215,7 +232,8 @@ dsh-session-eater/
    ├─ settings-text.png  # 设置页的「文案」区块
    ├─ settings-eaten.png # 设置页的「最近吃掉」区块
    ├─ toast-undo.png     # 吃掉后的回执与撤销按钮
-   └─ chew-cycle.png     # 咀嚼周期 10 帧分解
+   ├─ chew-cycle.png     # 咀嚼周期 10 帧分解
+   └─ chew-loop.gif      # 咀嚼循环动图（透明背景；loop.mjs 生成）
 ```
 
 ---
