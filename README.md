@@ -328,10 +328,21 @@ node scripts/publish-github.mjs             # 真推
 node scripts/release-github.mjs --dry-run
 node scripts/release-github.mjs             # 附件自动找上一层的 *-<version>.tgz / *.zip
 
+# 3) 投稿到插件市场（精选目录 awesome-dsh-plugin：一个 PR 加一个 yml）
+node scripts/submit-market.mjs --dry-run    # 离线：打印计划与待提交的 entry 内容
+node scripts/submit-market.mjs              # 加 topic + 补无版本号 tarball + fork + 建分支 + 开 PR
+
 # 打包（发 Release 前先做）
 npm pack --pack-destination ..
 Compress-Archive -Path .\* -DestinationPath ..\dsh-session-eater-<version>.zip
 ```
+
+**投稿到市场的硬性条件**（CI 会逐项检查，写在 `scripts/market-entry.yml` 的注释与
+`../市场投稿材料.md` 里）：`package.json` 必须有 `dsh.bundle`（只有 `dsh.client` 会被拒）、
+仓库根要有 `cordis.patch.yml`、仓库**创建满 1 天**、仓库带 `dsh-plugin` topic。
+`submit-market.mjs` 会先查仓库年龄，不满 1 天直接拒绝提交并告诉你可以提的时间。
+`tarball:` 建议指向**不带版本号**的附件（`releases/latest/download/<name>.tgz`）——
+带版本号的文件名会在下次发版后 404，脚本会自动补上传这个附件。
 
 **凭据**读取顺序：环境变量 `GITHUB_TOKEN` / `GITHUB_OWNER` → 工作区根目录的 `.github-token`。
 后者是两行文本（第 1 行 token，第 2 行用户名可选，`#` 开头是注释），建议存成 **UTF-8 带 BOM**，
