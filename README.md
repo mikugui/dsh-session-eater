@@ -231,6 +231,15 @@ dsh plugin --profile web add github:mikugui/dsh-session-eater
 装完 `dsh web` 会自动把本包加进 `dsh.profile.bundles`，**重启 `dsh web`** 即生效。
 想升级就 `dsh plugin --profile web update dsh-session-eater`。
 
+> ⚠️ `github:` 安装要靠 **pnpm + 全局可用的 `git`**。如果机器上只装了 GitHub Desktop
+> （它自带的 git 不进 PATH），先补上 PATH 再装，例如：
+>
+> ```powershell
+> $env:PATH += ";$env:LOCALAPPDATA\GitHubDesktop\app-3.6.6\resources\app\git\cmd"
+> ```
+>
+> 或者干脆装个 Git for Windows，或者改用下面的本地目录 / tgz 方式安装。
+
 从本地目录安装：
 
 ```powershell
