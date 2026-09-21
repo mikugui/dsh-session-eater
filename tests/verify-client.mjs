@@ -174,7 +174,10 @@ try {
       yes: box ? box.querySelector('[data-role="confirm-ok"]')?.textContent.trim() : null,
       no: box ? box.querySelector('[data-role="confirm-cancel"]')?.textContent.trim() : null,
       focused: document.activeElement ? document.activeElement.getAttribute('data-role') : null,
-      calls: window.__eaterCalls.length,
+      // 只数删除类请求：插件启动时会主动探一次 /status（客户端读不到 package.json），
+      // 那是正常的探测，不该算进"有没有发删除请求"
+      calls: window.__eaterCalls.filter((c) => /\/(delete|restore)$/.test(c.url)).length,
+      allCalls: window.__eaterCalls.map((c) => c.url),
       rects: { dialog: d, plate: p, slot: s },
       // 弹窗要落在投放区里，而投放区贴在会话列表下缘（左侧那一列）
       insidePlate: d !== null && p !== null && d[0] >= p[0] - 2 && d[2] <= p[2] + 2
@@ -201,7 +204,7 @@ try {
   const cancelled = await page.evaluate(() => ({
     dialog: document.querySelector('.dse-confirm') !== null,
     plate: document.querySelector('.dse-plate') !== null,
-    calls: window.__eaterCalls.length
+    calls: window.__eaterCalls.filter((c) => /\/(delete|restore)$/.test(c.url)).length
   }))
   report.step('点「取消」：收起确认框且一个请求都不发',
     cancelled.dialog === false && cancelled.plate === false && cancelled.calls === 0, JSON.stringify(cancelled))
@@ -269,6 +272,31 @@ try {
     JSON.stringify(withoutConfirm))
   // 还原，别把配置留在"关"的状态影响后面的用例
   await page.evaluate(() => { globalThis.__dshSessionEater.setConfig({ confirm: { enabled: true } }) })
+
+  // ── 样式自愈：样式被摘掉后不刷新也能自己回来 ────────────────────────
+  // 背景：客户端半边热重载时，apply 的清理函数会摘掉我们注入的 <style>；若那次重载
+  // 失败，页面就一直裸奔。实测过别人的插件栽在这（表情包面板从 4 列网格退化成一列竖排）。
+  const cssHeal = await page.evaluate(async () => {
+    const sel = 'style[data-plugin-css="dsh-session-eater/client.css"]'
+    const pill = document.querySelector('.dse-pill')
+    const before = {
+      style: document.querySelector(sel) !== null,
+      radius: pill ? getComputedStyle(pill).borderTopLeftRadius : null
+    }
+    document.querySelector(sel)?.remove()
+    const stripped = {
+      style: document.querySelector(sel) !== null,
+      radius: pill ? getComputedStyle(pill).borderTopLeftRadius : null
+    }
+    await new Promise((r) => setTimeout(r, 400))
+    const healed = document.querySelector(sel) !== null
+    return { before, stripped, healed, radius: pill ? getComputedStyle(pill).borderTopLeftRadius : null }
+  })
+  console.log('css self-heal:', JSON.stringify(cssHeal))
+  report.step('样式被摘掉后能自愈（不用刷新）',
+    cssHeal.before.style === true && cssHeal.stripped.style === false
+    && cssHeal.stripped.radius === '0px' && cssHeal.healed === true && cssHeal.radius === cssHeal.before.radius,
+    JSON.stringify(cssHeal))
 
   // ── 侧边栏撤销按钮：必须**不存在** ──────────────────────────────────
   // 它读的是 localStorage 台账，而台账本来就要跨刷新保留 —— 于是刷新/重启后那个
