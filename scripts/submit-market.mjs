@@ -12,6 +12,8 @@
  * 用法：
  *   node scripts/submit-market.mjs --dry-run     # 离线：只打印计划与 entry 内容
  *   node scripts/submit-market.mjs               # 真提交（需要令牌）
+ *   node scripts/submit-market.mjs --prepare     # 先做能做的：topic + tarball + fork + 分支 + 文件；
+ *                                                #   跳过 1 天门槛、不建 PR（到点后再跑一次即可）
  *   node scripts/submit-market.mjs --force       # 忽略 1 天门槛（会大概率被 CI 拒）
  *   node scripts/submit-market.mjs --skip-fork   # 已手动 fork 过，跳过 fork 等待
  *
@@ -37,6 +39,8 @@ const argv = process.argv.slice(2)
 const flag = (name) => argv.includes(name)
 const DRY = flag('--dry-run')
 const FORCE = flag('--force')
+/** --prepare：先把不受 1 天门槛限制的步骤做掉（topic / tarball / fork / 分支 / 文件），不建 PR。 */
+const PREPARE = flag('--prepare')
 
 const pkg = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
 const SELF = { owner: 'mikugui', repo: pkg.name }
@@ -136,19 +140,25 @@ const owner = user.login
 console.log(`\n身份        : ${owner}`)
 
 // ── 0) 仓库年龄门槛（CI 第 3 项，不满就别提）────────────────────────────
+//    注意：门槛只在 CI 跑 PR 时才检查，所以 --prepare 可以直接跳过，
+//    把 topic / tarball / fork / 分支 / 文件这些不受影响的事先做掉。
 const selfRepo = await api(token, 'GET', `/repos/${owner}/${SELF.repo}`)
 const createdUtc = new Date(selfRepo.created_at)
 const ageHours = (Date.now() - createdUtc.getTime()) / 36e5
+const eligible = new Date(createdUtc.getTime() + 864e5)
+const eligibleLocal = new Date(eligible.getTime() + 8 * 36e5).toISOString().replace('T', ' ').slice(0, 19)
 console.log(`仓库年龄    : ${ageHours.toFixed(1)} 小时（门槛 24 小时）`)
 if (ageHours < 24 && !FORCE) {
   const left = (24 - ageHours).toFixed(1)
-  const eligible = new Date(createdUtc.getTime() + 864e5)
-  throw new Error(
-    `还差 ${left} 小时才满 1 天 —— CI 会拒绝（repo age 是硬性检查）。\n` +
-    `  可提时间（UTC）    : ${eligible.toISOString()}\n` +
-    `  可提时间（北京时间）: ${new Date(eligible.getTime() + 8 * 36e5).toISOString().replace('T', ' ').slice(0, 19)}\n` +
-    '  到点再跑本脚本，或加 --force 强行提交（预计被 CI 拒）。'
-  )
+  if (!PREPARE) {
+    throw new Error(
+      `还差 ${left} 小时才满 1 天 —— CI 会拒绝（repo age 是硬性检查）。\n` +
+      `  可提时间（UTC）    : ${eligible.toISOString()}\n` +
+      `  可提时间（北京时间）: ${eligibleLocal}\n` +
+      '  想先做能做的部分：加 --prepare（跳过门槛，只做 topic/tarball/fork/分支/文件），到点再跑一次。'
+    )
+  }
+  console.log(`  --prepare 模式：跳过门槛，先做不受影响的步骤；开 PR 需等到 ${eligibleLocal}（还差 ${left} 小时）`)
 }
 
 // ── 1) topics ──────────────────────────────────────────────────────────
@@ -218,6 +228,15 @@ await api(token, 'PUT', `/repos/${forkFull}/contents/${ENTRY_PATH}`, {
   ...(existingSha === undefined ? {} : { sha: existingSha })
 })
 console.log(`已写文件    : ${ENTRY_PATH}`)
+
+if (PREPARE) {
+  console.log('\n--prepare 完成：topic / tarball / fork / 分支 / 文件 都就位了。')
+  console.log(`  分支 ${owner}:${BRANCH} 已在你的 fork 里，随时可以开 PR。`)
+  console.log(`  到 ${eligibleLocal}（北京时间）之后，二选一：`)
+  console.log('    · 再跑一次本脚本（去掉 --prepare）→ 自动开 PR')
+  console.log(`    · 或打开 https://github.com/${forkFull}/tree/${BRANCH} 点 "Compare & pull request"`)
+  process.exit(0)
+}
 
 const pr = await api(token, 'POST', `/repos/${TARGET.owner}/${TARGET.repo}/pulls`, {
   title: `Add ${SELF.owner}/${SELF.repo}`,
