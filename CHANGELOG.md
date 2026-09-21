@@ -1,5 +1,20 @@
 # 更新记录
 
+## 未发布（文档）
+
+- **文档**：修掉「本机当前的实际装法（免重启热装载）」——那节要求把 `- insert:` 抄进
+  用户 patch 层，同时又警告「不要把本包加进 `dsh.profile.bundles`」。这两条同时成立时
+  boot 会直接崩：bundle 层 + 用户 patch 层各插一次同一个 id，loader 抛
+  `duplicate loader entry id: dsh-session-eater`（2026-09-21 实际踩到，只能手改 YAML 才救回来）。
+  现在统一写成**只走 bundle 层**（`dsh plugin --profile web add "link:<目录>"`），并补了
+  `dsh web --dump-config` 查重复 id 的自检方法。
+- **文档**：`cordis.patch.yml` 顶部注释同步改写，明确「不要再抄一份到用户 patch 层」
+  与「宿主侧 `lib/index.js` 改动必须重启 `dsh web`」。
+- **修复**：宿主 `/status` 的 `version` 之前写死成 `0.3.0`（包早就到 0.4.x 了），排障时
+  差点把"宿主其实是新版"误判成"宿主没重载"；现在直接读 `package.json`，不会再漂移。
+- **文档**：新增「排障：删不掉 / 拖了没反应」——先 F5（重启后旧标签页跑的还是旧 bundle，
+  请求压根不发）、再打 `/status`、再查日志里的 `duplicate loader entry id`。
+
 ## 0.4.1
 
 - **修复**：`scripts/*.mjs --dry-run` 之前会**先校验凭据**，没有令牌就直接报错 ——

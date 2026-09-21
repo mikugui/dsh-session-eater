@@ -1,14 +1,17 @@
 # dsh-session-eater bundle patch.
 #
-# 这是一个标准 DSH bundle 插件：官方安装方式是
-#     dsh plugin --profile web add link:<本目录绝对路径>
-# 之后 bundle 层会在下次启动时插入下面这条 loader 行。
+# 这是标准 DSH bundle 插件，唯一官方安装方式：
+#     dsh plugin --profile web add "link:<本目录绝对路径>"
+# 装完后由 bundle 层（package.json 的 dsh.profile.bundles）插入下面这条 loader 行。
 #
-# ⚠️ 本机当前是「免重启热装载」：这条 insert 已经被写进
-#    %DSH_HOME%\profiles\web\cordis.patch.yml（用户层，被 live watch）。
-#    因此 **不要** 同时把本包加进 profile 的 dsh.profile.bundles，
-#    否则同一个 id 会被插入两次（loader 报重复 id）。
-
+# ⚠️ 不要再把这条 insert 另抄一份到用户 patch 层
+#    （%DSH_HOME%\profiles\<profile>\cordis.patch.yml）。
+#    2026-09-21 就因为这个炸过：bundle 层 + 用户 patch 层各插一次同一个 id，
+#    loader 抛 `duplicate loader entry id: dsh-session-eater`，boot 直接崩，
+#    只能手改 YAML 才能救回来。二选一，且以 bundle 层为准。
+#
+# ⚠️ 宿主侧改动（lib/index.js）必须重启 dsh web 才生效；
+#    客户端侧（lib/client.js）由 dsh-client-hmr 热重载。
 - insert:
     - id: dsh-session-eater
       name: dsh-session-eater

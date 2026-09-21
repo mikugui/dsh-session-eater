@@ -269,40 +269,42 @@ dsh plugin --profile web add "D:\path\to\dsh-session-eater-0.4.0.tgz"
 整个插件**零运行时依赖**（宿主半边只用 node 内置模块，客户端半边只 require 宿主已提供的
 `react` / `react/jsx-runtime`），所以不需要任何额外安装步骤。
 
-### 本机当前的实际装法（免重启热装载）
+### 本机当前的实际装法（bundle 层）
 
-这台机器上**已经装好并且在跑**了，走的是 profile 的用户 patch 层（该文件被
-`patchReload: live` 实时监听，所以不用重启）：
+这台机器上**已经装好并且在跑**了，走的是**标准 bundle 层**（`package.json` 的
+`dsh.profile.bundles` + pnpm `link:`），用户 patch 层里**不要再放**同名 insert：
 
-```yaml
-# %DSH_HOME%\profiles\web\cordis.patch.yml
-- insert:
-    - id: dsh-session-eater
-      name: dsh-session-eater
+```jsonc
+// %DSH_HOME%\profiles\web\package.json
+"dependencies": { "dsh-session-eater": "link:D:/deepseek harness/dsh-session-eater" },
+"dsh": { "profile": { "bundles": [ "...", "dsh-session-eater" ] } }
 ```
 
-依赖本身用 pnpm 链接进 profile：
+安装 / 卸载都走 CLI，别手改 YAML：
 
 ```powershell
-pnpm --dir "$env:USERPROFILE\.dsh\profiles\web" add "link:D:\deepseek harness\dsh-session-eater"
+dsh plugin --profile web add "link:D:\deepseek harness\dsh-session-eater"
+dsh plugin --profile web remove dsh-session-eater
 ```
 
-> ⚠️ **不要把本包同时加进 `dsh.profile.bundles`**。bundle 层和用户 patch 层会各插一次，
-> 同一个 id 插两遍，loader 会报重复。二选一即可。
+> ⚠️ **不要同时在用户 patch 层（`profiles\web\cordis.patch.yml`）里再 insert 一次。**
+> bundle 层和用户 patch 层会各插一遍同一个 id，loader 直接抛
+> `duplicate loader entry id: dsh-session-eater` 把 boot 打崩
+> （2026-09-21 实际踩过，只能手改 YAML 才救得回来）。二选一，且以 bundle 层为准。
 >
-> ⚠️ **改了 `lib/index.js` 需要让 loader 重新 import 才生效**。重写 patch 里的同一条目
-> 有时能触发重新加载、有时会命中 Node 的 ESM 模块缓存（实测不稳定）——
-> 拿不准就直接重启 `dsh web`。客户端半边（`lib/client.js`）不受影响：
-> `dsh-client-hmr` 在轮询 bundle，改完浏览器会自动热重载。
-> 想确认宿主半边的版本，看 `/dsh-session-eater/status` 返回的 `version` 字段。
-
-卸载：
-
-```powershell
-# 1. 删掉 cordis.patch.yml 里那三行（- insert: / - id: / name:）
-# 2. 解除链接
-pnpm --dir "$env:USERPROFILE\.dsh\profiles\web" remove dsh-session-eater
-```
+> ⚠️ **改了宿主侧 `lib/index.js` 必须重启 `dsh web` 才生效。**
+> bundle 层不做热重载；`patchReload: live` 只监听 patch 层文件，不会重新 import 模块。
+> 客户端半边（`lib/client.js`）不受影响：`dsh-client-hmr` 在轮询 bundle，改完浏览器
+> 会自动热重载。想确认宿主半边的版本，看 `/dsh-session-eater/status` 返回的
+> `version` 字段。
+>
+> 🧭 改完 patch / 依赖后自检一次——重复 id 会在这里立刻暴露，而不是等到启动时崩：
+>
+> ```powershell
+> dsh web --dump-config > $env:TEMP\dump.yml
+> Select-String $env:TEMP\dump.yml -Pattern "^- id: " |
+>   ForEach-Object { $_.Line.Trim() } | Group-Object | Where-Object Count -gt 1
+> ```
 
 ---
 
@@ -414,6 +416,33 @@ git push --follow-tags
 > curl.exe -4 -s -o NUL -w "%{http_code}`n" -m 20 https://github.com/     # 000 = 不通
 > Invoke-RestMethod https://api.github.com/rate_limit                    # 有响应 = 通
 > ```
+
+---
+
+## 排障：删不掉 / 拖了没反应
+
+按这个顺序查，绝大多数情况第 1 步就好了：
+
+1. **先刷新页面（F5）。** 客户端半边由 `dsh-client-hmr` 热重载，**宿主半边改动要重启 `dsh web`**。
+   如果你在重启前就开着页面，标签页里跑的可能还是旧 bundle —— 现象正是"拖进去没反应、
+   会话删不掉"，而且**回收站里一条新记录都没有**（请求根本没发出去）。
+   （实测踩过一次：`dsh web` 重启后旧标签页就这么僵着，刷新即好。）
+2. **看宿主半边活着没：**
+   ```powershell
+   curl http://127.0.0.1:3080/dsh-session-eater/status
+   ```
+   返回 `{"ok":true,...,"version":"0.4.1"}` 就正常。`version` 直接读自 `package.json`，
+   所以"装的到底是哪一版"一眼能看出来，不会骗人。
+3. **看日志有没有 loader 报错**（`%TEMP%\dsh-web.log`）：
+   - `duplicate loader entry id: dsh-session-eater`
+     → 插件被注册了**两次**。它只能出现在**一处**：profile `package.json` 的
+     `dsh.profile.bundles`，**或者** profile `cordis.patch.yml` 里的 `insert:`，不能两边都写。
+     （插件管理器每次装/卸插件都会按 dependencies 重组 bundles，很容易把两边都写上；
+     踩过一次，loader 直接起不来。）
+   - 其它 `plugin tree failed to load` → 先修 patch / bundles，再重启。
+
+删除失败时回执会带原因（例如「没吃下去：HTTP 404」，或宿主返回的
+`session not found` / `move-failed`），把那一行贴出来就能定位。
 
 ---
 
