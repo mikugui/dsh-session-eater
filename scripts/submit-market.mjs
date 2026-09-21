@@ -32,15 +32,23 @@ const UPLOADS = 'https://uploads.github.com'
 
 /** 精选目录所在仓库。 */
 const TARGET = { owner: 'awesome-dsh-plugin', repo: 'awesome-dsh-plugin' }
-/** 投稿的分支名。 */
-const BRANCH = 'add-dsh-session-eater'
 
 const argv = process.argv.slice(2)
 const flag = (name) => argv.includes(name)
+const value = (name, fallback) => {
+  const at = argv.indexOf(name)
+  return at === -1 || argv[at + 1] === undefined ? fallback : argv[at + 1]
+}
 const DRY = flag('--dry-run')
 const FORCE = flag('--force')
 /** --prepare：先把不受 1 天门槛限制的步骤做掉（topic / tarball / fork / 分支 / 文件），不建 PR。 */
 const PREPARE = flag('--prepare')
+/**
+ * 投稿的分支名。**改条目内容时建议换个新分支名**（`--branch update-entry-0.5.0` 之类）：
+ * 分支已存在时脚本会沿用旧分支，而旧分支是基于当时那次 main 建的 —— 换成新分支才会
+ * 基于**当前** main 建，PR 就是一次干净的增量，不会把上游这期间的改动一起卷进 diff。
+ */
+const BRANCH = value('--branch', 'add-dsh-session-eater')
 
 const pkg = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'))
 const SELF = { owner: 'mikugui', repo: pkg.name }
