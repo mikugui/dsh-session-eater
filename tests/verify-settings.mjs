@@ -316,6 +316,39 @@ try {
   }, CONFIG_KEY)
   report.step('恢复全部默认', resetOk && afterReset.size === 104 && afterReset.pillSize === 26
     && afterReset.mode === 'widget' && afterReset.mouth === 'auto', JSON.stringify(afterReset))
+
+  // ── 8. 点侧栏药丸 → 直达本插件的设置分区 ────────────────────────────
+  // 设置面板的开合是内核内部的 React state，没有对外 API，所以实现里点的是真 DOM
+  // （设置触发器 → 导航项）。这条就是那段 DOM 逻辑的回归测试：内核升级把 aria-label
+  // 或导航项文案改掉、或者 data-slot 契约变了，这里会立刻红。
+  await page.keyboard.press('Escape') // 先关掉面板，测「关着 → 点药丸打开」这条路
+  await new Promise((r) => setTimeout(r, 700))
+  const closedFirst = await page.evaluate(() => document.querySelector('.dse-cfg') === null)
+  const pillClicked = await page.evaluate(() => {
+    const pill = document.querySelector('.dse-pill')
+    if (pill === null) return false
+    pill.click()
+    return true
+  })
+  let landed = null
+  for (let i = 0; i < 30 && landed === null; i += 1) {
+    await new Promise((r) => setTimeout(r, 120))
+    landed = await page.evaluate(() => {
+      const dialog = document.querySelector("[role='dialog']")
+      const nav = [...document.querySelectorAll('button')]
+        .find((b) => (b.textContent || '').trim() === '会话喂鱼' && b.offsetParent !== null)
+      if (dialog === null || nav === undefined || nav === null) return null
+      return {
+        dialog: true,
+        active: /active/i.test(String(nav.className)),
+        sectionRendered: document.querySelector('.dse-cfg') !== null
+      }
+    })
+    if (landed !== null && landed.sectionRendered) break
+  }
+  report.step('点侧栏药丸直达「设置 → 会话喂鱼」',
+    closedFirst && pillClicked && landed !== null && landed.sectionRendered,
+    JSON.stringify({ closedFirst, pillClicked, landed }))
 } finally {
   await browser.close().catch(() => {})
 }
