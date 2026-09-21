@@ -234,6 +234,44 @@ try {
   const readTextConfig = () => page.evaluate(() => JSON.parse(
     window.localStorage.getItem('dsh-session-eater/config') || '{}').text)
 
+  // ── 可折叠区块：「文案」和「最近吃掉」默认收起，点标题展开 ──────────
+  const foldState = () => page.evaluate(() => {
+    const read = (id) => {
+      const block = document.querySelector(`[data-fold="${id}"]`)
+      return block === null ? null : {
+        open: block.getAttribute('data-open') === 'true',
+        body: block.querySelector('.dse-cfg-fold-body') !== null,
+        summary: block.querySelector('.dse-cfg-fold-sum')?.textContent.trim() ?? null
+      }
+    }
+    return { text: read('text'), eaten: read('eaten') }
+  })
+  const setFold = async (id, want) => {
+    const now = (await foldState())[id]
+    if (now !== null && now.open !== want) {
+      await page.click(`[data-role="fold-${id}"]`)
+      await new Promise((r) => setTimeout(r, 350))
+    }
+  }
+
+  const folded = await foldState()
+  console.log('fold state (默认):', JSON.stringify(folded))
+  report.step('「文案」和「最近吃掉」默认都是收起的',
+    folded.text?.open === false && folded.text?.body === false
+    && folded.eaten?.open === false && folded.eaten?.body === false,
+    JSON.stringify(folded))
+  report.step('收起时标题右侧给出条数摘要',
+    folded.text?.summary === '15 段' && (folded.eaten?.summary === '空' || /条$/.test(folded.eaten?.summary ?? '')),
+    `文案=${folded.text?.summary} 最近吃掉=${folded.eaten?.summary}`)
+
+  await setFold('text', true)
+  const expanded = await foldState()
+  const storedOpen = await page.evaluate(() => JSON.parse(
+    window.localStorage.getItem('dsh-session-eater/config') || '{}')?.ui?.open?.text)
+  report.step('点标题能展开「文案」，且展开状态落盘',
+    expanded.text?.open === true && expanded.text?.body === true && storedOpen === true,
+    JSON.stringify({ expanded: expanded.text, storedOpen }))
+
   const textFields = await page.evaluate(() => [...document.querySelectorAll('.dse-cfg-field-label')]
     .map((el) => el.textContent.trim()))
   report.step('设置页里有全部文案输入框', textFields.length >= 15, `${textFields.length} 项: ${textFields.slice(0, 4).join('/')}…`)
@@ -241,33 +279,32 @@ try {
     textFields.includes('确认弹窗标题') && textFields.includes('确认弹窗：确定') && textFields.includes('确认弹窗：取消'),
     textFields.filter((t) => t.startsWith('确认弹窗')).join(' / '))
 
-  // 「删除前确认」开关：默认开，点一下应该关掉并落盘
+  // 「删除前确认」：只要功能名 + 开关，不要说明
   const confirmToggle = await page.evaluate(() => {
-    const root = document.querySelector('.dse-cfg')
-    const hit = [...(root?.querySelectorAll('*') ?? [])]
-      .find((el) => el.children.length === 0 && el.textContent.trim() === '拖上去先问一句')
-    if (hit === undefined) return { found: false }
-    // 同一行里的 checkbox
-    const row = hit.closest('label') ?? hit.parentElement?.parentElement ?? hit.parentElement
-    const input = row?.querySelector('input[type="checkbox"]') ?? null
+    const input = document.querySelector('[data-role="toggle-confirm"]')
+    if (input === null) return { found: false }
+    const block = input.closest('.dse-cfg-block')
     return {
       found: true,
-      rowText: row ? row.textContent.trim().slice(0, 40) : null,
-      hasInput: input !== null,
-      checked: input ? input.checked : null
+      checked: input.checked,
+      blockText: block ? block.textContent.trim() : null,
+      hints: [...(block?.querySelectorAll('.dse-cfg-hint') ?? [])]
+        .map((el) => el.textContent.trim()).filter((t) => t !== '开' && t !== '关'),
+      titleCount: block ? block.querySelectorAll('h3').length : 0
     }
   })
   console.log('confirm toggle:', JSON.stringify(confirmToggle))
+  report.step('「删除前确认」只有功能名 + 开关',
+    confirmToggle.found === true && confirmToggle.checked === true
+    && confirmToggle.titleCount === 1 && confirmToggle.hints.length === 0
+    && confirmToggle.blockText.includes('删除前确认'),
+    JSON.stringify(confirmToggle))
   report.step('设置页有「删除前确认」开关且默认开',
     confirmToggle.found === true && confirmToggle.checked === true, JSON.stringify(confirmToggle))
   if (confirmToggle.found) {
     const clicked = await page.evaluate(() => {
-      const root = document.querySelector('.dse-cfg')
-      const hit = [...(root?.querySelectorAll('*') ?? [])]
-        .find((el) => el.children.length === 0 && el.textContent.trim() === '拖上去先问一句')
-      const row = hit?.closest('label') ?? hit?.parentElement?.parentElement ?? hit?.parentElement
-      const input = row?.querySelector('input[type="checkbox"]')
-      if (!input) return false
+      const input = document.querySelector('[data-role="toggle-confirm"]')
+      if (input === null) return false
       input.click()
       return true
     })
@@ -324,21 +361,51 @@ try {
     && afterTextReset.cfg.over === '啊啊啊' && afterTextReset.cfg.dropHint === '拖到这里丢掉'
     && afterTextReset.pill === '想吃大白饭', JSON.stringify(afterTextReset.cfg))
 
-  // 给 README 留一张「文案」区块的图
+  // 给 README 留一张「文案」区块的图（标题现在是折叠按钮里的 span，不再是 h3）
+  await setFold('text', true)
   await page.evaluate(() => {
-    const heading = [...document.querySelectorAll('.dse-cfg h3')].find((h) => h.textContent === '文案')
-    heading?.scrollIntoView({ block: 'center' })
+    document.querySelector('[data-role="fold-text"]')?.scrollIntoView({ block: 'center' })
   })
   await new Promise((r) => setTimeout(r, 400))
   await page.screenshot({ path: fileURLToPath(new URL('../docs/settings-text.png', import.meta.url)) })
 
-  // 「最近吃掉」是可持久撤销的地方，也留一张
+  // 「最近吃掉」是可持久撤销的地方，也留一张（要先展开）
+  // 这个套件自己不吃会话，所以先往台账里塞两条假的（只写 localStorage，不碰真数据）
   await page.evaluate(() => {
-    const heading = [...document.querySelectorAll('.dse-cfg h3')].find((h) => h.textContent === '最近吃掉')
-    heading?.scrollIntoView({ block: 'center' })
+    window.localStorage.setItem('dsh-session-eater/eaten', JSON.stringify([
+      { sessionId: 'session-00000000-0000-0000-0000-0000000000aa', title: '示例：早上好挥手打招呼', at: Date.now() - 90_000 },
+      { sessionId: 'session-00000000-0000-0000-0000-0000000000bb', title: '示例：摸鱼躺平不想动', at: Date.now() - 3_600_000 }
+    ]))
+  })
+  // 两个区块都展开，再刷新 —— 这一刷同时验证「折叠状态跨刷新保持」
+  await setFold('eaten', true)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await new Promise((r) => setTimeout(r, 12000))
+  await openSection()
+  const foldAfterReload = await foldState()
+  report.step('折叠状态刷新后保持（文案/最近吃掉都还是展开）',
+    foldAfterReload.text?.open === true && foldAfterReload.eaten?.open === true, JSON.stringify(foldAfterReload))
+
+  const eatenOpen = await foldState()
+  const eatenRows = await page.evaluate(() => document.querySelectorAll('.dse-cfg-eaten').length)
+  report.step('展开「最近吃掉」能看到台账条目（摘要也跟着变成条数）',
+    eatenOpen.eaten?.open === true && eatenOpen.eaten?.body === true && eatenRows === 2
+    && /^2 条$/.test(eatenOpen.eaten?.summary ?? ''),
+    JSON.stringify({ open: eatenOpen.eaten, rows: eatenRows }))
+  await page.evaluate(() => {
+    document.querySelector('[data-role="fold-eaten"]')?.scrollIntoView({ block: 'center' })
   })
   await new Promise((r) => setTimeout(r, 400))
   await page.screenshot({ path: fileURLToPath(new URL('../docs/settings-eaten.png', import.meta.url)) })
+
+  // 收回去，恢复默认的干净状态
+  await setFold('text', false)
+  await setFold('eaten', false)
+  const reFolded = await foldState()
+  report.step('再点一次能收起，且正文不再渲染',
+    reFolded.text?.open === false && reFolded.text?.body === false
+    && reFolded.eaten?.open === false && reFolded.eaten?.body === false,
+    JSON.stringify(reFolded))
 
   // ── 7. 恢复默认 ─────────────────────────────────────────────────────
   await page.evaluate(() => {
