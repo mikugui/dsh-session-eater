@@ -189,6 +189,21 @@ for (const file of assets) {
   console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB`)
 }
 
+// 3) 再补一个**不带版本号**的 tgz。
+//    市场条目里的 tarball 写的是 `releases/latest/download/<name>.tgz`：latest 在请求时解析，
+//    但**文件名是照字面取的** —— 所以每个 Release 都得带上这个不带版本号的名字，
+//    否则下一次发版这个链接就 404（官方 CI 指南专门警告过这一点）。
+const stableName = `${pkg.name}.tgz`
+const stableSource = assets.find((file) => file.endsWith('.tgz'))
+if (stableSource === undefined) {
+  console.log(`提示     : 没有 tgz，跳过 ${stableName}`)
+} else if (uploaded.has(stableName)) {
+  console.log(`跳过     : ${stableName}（已存在）`)
+} else {
+  const asset = await uploadAsset(token, owner, REPO, existingRelease.id, stableSource, stableName)
+  console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB  ← 市场 latest/download 靠它`)
+}
+
 const final = await api(token, 'GET', `/repos/${owner}/${REPO}/releases/tags/${TAG}`)
 console.log(`\n✅ Release: ${final.html_url}`)
 for (const asset of final.assets ?? []) {
