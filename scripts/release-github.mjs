@@ -193,15 +193,32 @@ for (const file of assets) {
 //    市场条目里的 tarball 写的是 `releases/latest/download/<name>.tgz`：latest 在请求时解析，
 //    但**文件名是照字面取的** —— 所以每个 Release 都得带上这个不带版本号的名字，
 //    否则下一次发版这个链接就 404（官方 CI 指南专门警告过这一点）。
+//
+//    ⚠️ GitHub 的 release 附件名是**仓库级唯一**，不是每个 Release 各自一份：
+//    v0.4.1 已经占着 `dsh-session-eater.tgz`，直接往 v0.5.0 传会 422 already_exists。
+//    所以这里先把这个名字从**别的** Release 上摘下来，再传到当前 Release —— 这样
+//    `latest/download/` 永远指向最新那份，而旧 Release 的带版本号附件一个不动。
 const stableName = `${pkg.name}.tgz`
 const stableSource = assets.find((file) => file.endsWith('.tgz'))
 if (stableSource === undefined) {
   console.log(`提示     : 没有 tgz，跳过 ${stableName}`)
-} else if (uploaded.has(stableName)) {
-  console.log(`跳过     : ${stableName}（已存在）`)
 } else {
-  const asset = await uploadAsset(token, owner, REPO, existingRelease.id, stableSource, stableName)
-  console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB  ← 市场 latest/download 靠它`)
+  const allReleases = await api(token, 'GET', `/repos/${owner}/${REPO}/releases`)
+  for (const release of allReleases) {
+    if (release.tag_name === TAG) continue
+    for (const asset of release.assets ?? []) {
+      if (asset.name !== stableName) continue
+      await api(token, 'DELETE', `/repos/${owner}/${REPO}/releases/assets/${asset.id}`)
+      console.log(`腾名字   : 从 ${release.tag_name} 摘掉 ${stableName}（仓库级唯一，先让它空出来）`)
+    }
+  }
+  const stillThere = (existingRelease.assets ?? []).some((asset) => asset.name === stableName)
+  if (stillThere) {
+    console.log(`跳过     : ${stableName}（这个 Release 已经有了）`)
+  } else {
+    const asset = await uploadAsset(token, owner, REPO, existingRelease.id, stableSource, stableName)
+    console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB  ← 市场 latest/download 靠它`)
+  }
 }
 
 const final = await api(token, 'GET', `/repos/${owner}/${REPO}/releases/tags/${TAG}`)
