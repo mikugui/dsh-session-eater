@@ -236,7 +236,48 @@ try {
 
   const textFields = await page.evaluate(() => [...document.querySelectorAll('.dse-cfg-field-label')]
     .map((el) => el.textContent.trim()))
-  report.step('设置页里有全部文案输入框', textFields.length >= 12, `${textFields.length} 项: ${textFields.slice(0, 4).join('/')}…`)
+  report.step('设置页里有全部文案输入框', textFields.length >= 15, `${textFields.length} 项: ${textFields.slice(0, 4).join('/')}…`)
+  report.step('确认弹窗那三段文案也能改',
+    textFields.includes('确认弹窗标题') && textFields.includes('确认弹窗：确定') && textFields.includes('确认弹窗：取消'),
+    textFields.filter((t) => t.startsWith('确认弹窗')).join(' / '))
+
+  // 「删除前确认」开关：默认开，点一下应该关掉并落盘
+  const confirmToggle = await page.evaluate(() => {
+    const root = document.querySelector('.dse-cfg')
+    const hit = [...(root?.querySelectorAll('*') ?? [])]
+      .find((el) => el.children.length === 0 && el.textContent.trim() === '拖上去先问一句')
+    if (hit === undefined) return { found: false }
+    // 同一行里的 checkbox
+    const row = hit.closest('label') ?? hit.parentElement?.parentElement ?? hit.parentElement
+    const input = row?.querySelector('input[type="checkbox"]') ?? null
+    return {
+      found: true,
+      rowText: row ? row.textContent.trim().slice(0, 40) : null,
+      hasInput: input !== null,
+      checked: input ? input.checked : null
+    }
+  })
+  console.log('confirm toggle:', JSON.stringify(confirmToggle))
+  report.step('设置页有「删除前确认」开关且默认开',
+    confirmToggle.found === true && confirmToggle.checked === true, JSON.stringify(confirmToggle))
+  if (confirmToggle.found) {
+    const clicked = await page.evaluate(() => {
+      const root = document.querySelector('.dse-cfg')
+      const hit = [...(root?.querySelectorAll('*') ?? [])]
+        .find((el) => el.children.length === 0 && el.textContent.trim() === '拖上去先问一句')
+      const row = hit?.closest('label') ?? hit?.parentElement?.parentElement ?? hit?.parentElement
+      const input = row?.querySelector('input[type="checkbox"]')
+      if (!input) return false
+      input.click()
+      return true
+    })
+    await new Promise((r) => setTimeout(r, 400))
+    const after = await page.evaluate(() => JSON.parse(
+      window.localStorage.getItem('dsh-session-eater/config') || '{}')?.confirm?.enabled)
+    report.step('点开关能关掉确认并落盘', clicked && after === false, `confirm.enabled=${after}`)
+    // 还原，别影响后面的用例
+    await page.evaluate(() => { globalThis.__dshSessionEater.setConfig({ confirm: { enabled: true } }) })
+  }
 
   // 出厂默认应当就是用户要的那两条
   const defaults = await page.evaluate(() => JSON.parse(

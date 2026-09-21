@@ -125,11 +125,95 @@ try {
     hovered.plateOver === 'true' && hovered.borderStyle === 'solid' && hovered.note.includes('啊啊啊'),
     `${hovered.plateOver}/${hovered.borderStyle}/${hovered.note}`)
 
+  // ── 拖上去先弹确认（默认开）────────────────────────────────────────
+  // 以前是松手即删；现在停在会话列表里问一句，点了「删除」才真吃。
+  const armAndDrop = async () => {
+    await page.evaluate((sid) => {
+      const rows = [...document.querySelectorAll("[class*='sessionRow']")]
+      const row = rows.find((el) => !/selected/i.test(el.className) && el.querySelector("[class*='rowActions']"))
+        ?? rows.find((el) => el.querySelector("[class*='rowActions']"))
+      row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: window.__dt(sid) }))
+    }, SESSION)
+    await new Promise((r) => setTimeout(r, 300))
+    await page.evaluate((sid) => {
+      const plate = document.querySelector('.dse-plate')
+      const dt = window.__dt(sid)
+      plate.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }))
+      plate.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    }, SESSION)
+    await new Promise((r) => setTimeout(r, 400))
+    await page.evaluate((sid) => {
+      const plate = document.querySelector('.dse-plate')
+      plate.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt(sid) }))
+    }, SESSION)
+    await new Promise((r) => setTimeout(r, 500))
+  }
+
   await page.evaluate((sid) => {
     const plate = document.querySelector('.dse-plate')
     plate.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt(sid) }))
   }, SESSION)
-  await new Promise((r) => setTimeout(r, 1200))
+  await new Promise((r) => setTimeout(r, 500))
+
+  const dialog = await page.evaluate(() => {
+    const box = document.querySelector('.dse-confirm')
+    const plate = document.querySelector('.dse-plate')
+    const slot = document.querySelector("[data-slot='sidebar.workspaces']")
+    const r = (el) => {
+      if (!el) return null
+      const b = el.getBoundingClientRect()
+      return [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)]
+    }
+    const d = r(box)
+    const p = r(plate)
+    const s = r(slot)
+    return {
+      exists: box !== null,
+      ask: box ? box.querySelector('.dse-confirm-ask')?.textContent.trim() : null,
+      who: box ? box.querySelector('.dse-confirm-who')?.textContent.trim() : null,
+      yes: box ? box.querySelector('[data-role="confirm-ok"]')?.textContent.trim() : null,
+      no: box ? box.querySelector('[data-role="confirm-cancel"]')?.textContent.trim() : null,
+      focused: document.activeElement ? document.activeElement.getAttribute('data-role') : null,
+      calls: window.__eaterCalls.length,
+      rects: { dialog: d, plate: p, slot: s },
+      // 弹窗要落在投放区里，而投放区贴在会话列表下缘（左侧那一列）
+      insidePlate: d !== null && p !== null && d[0] >= p[0] - 2 && d[2] <= p[2] + 2
+        && d[1] >= p[1] - 2 && d[3] <= p[3] + 2,
+      // 注意别用 [data-slot='sidebar.workspaces'] 量位置：那层壳的 rect 是 0×0
+      // （display:contents），拿它比会永远失败 —— 用视口左半边判定
+      plateInLeftColumn: p !== null && p[0] >= 0 && p[2] <= window.innerWidth * 0.45
+    }
+  })
+  console.log('confirm dialog:', JSON.stringify(dialog))
+  report.step('拖上去先弹确认、且此刻不发任何删除请求',
+    dialog.exists === true && dialog.calls === 0, JSON.stringify(dialog))
+  report.step('确认框落在投放区里（即左侧会话列表内）',
+    dialog.insidePlate === true && dialog.plateInLeftColumn === true, JSON.stringify(dialog.rects))
+  report.step('确认框问清楚是哪条会话、并给出两个按钮',
+    String(dialog.ask || '').includes('确定要删除') && dialog.who === SESSION
+    && dialog.yes === '删除' && dialog.no === '取消', JSON.stringify(dialog))
+  report.step('默认焦点在「取消」上（回车不该误删）', dialog.focused === 'confirm-cancel', String(dialog.focused))
+  await page.screenshot({ path: fileURLToPath(new URL('../docs/confirm.png', import.meta.url)) })
+
+  // 取消这条路：收起来，一个请求都不许发
+  await page.click('[data-role="confirm-cancel"]')
+  await new Promise((r) => setTimeout(r, 400))
+  const cancelled = await page.evaluate(() => ({
+    dialog: document.querySelector('.dse-confirm') !== null,
+    plate: document.querySelector('.dse-plate') !== null,
+    calls: window.__eaterCalls.length
+  }))
+  report.step('点「取消」：收起确认框且一个请求都不发',
+    cancelled.dialog === false && cancelled.plate === false && cancelled.calls === 0, JSON.stringify(cancelled))
+
+  // 确定这条路：这次才真删
+  await armAndDrop()
+  const confirmed = await page.evaluate(() => ({
+    dialog: document.querySelector('.dse-confirm') !== null,
+    ok: document.querySelector('[data-role="confirm-ok"]') !== null
+  }))
+  await page.click('[data-role="confirm-ok"]')
+  await new Promise((r) => setTimeout(r, 1400))
 
   const after = await page.evaluate(() => {
     const toast = document.querySelector('.dse-toast')
@@ -149,8 +233,9 @@ try {
       ledger: globalThis.__dshSessionEater?.lastEaten?.() ?? null
     }
   })
-  report.step('drop issues POST /dsh-session-eater/delete',
-    after.calls.some((c) => c.url.includes('/delete') && c.method === 'POST'), JSON.stringify(after.calls))
+  report.step('点「删除」才发 POST /dsh-session-eater/delete',
+    confirmed.dialog && confirmed.ok && after.calls.some((c) => c.url.includes('/delete') && c.method === 'POST'),
+    JSON.stringify(after.calls))
   report.step('success toast offers the 撤销 undo action',
     after.toast !== null && after.undo && after.kind === 'ok', after.toast || 'none')
   report.step('撤销按钮真的可见（有尺寸、在视口内）',
@@ -169,38 +254,48 @@ try {
     stillThere.toast && stillThere.undo, JSON.stringify(stillThere))
   await page.screenshot({ path: fileURLToPath(new URL('../docs/toast-undo.png', import.meta.url)) })
 
-  // ── 侧边栏药丸行右侧的撤销按钮 ──────────────────────────────────────
+  // 关掉「删除前确认」→ 回到"松手即删"的老行为（设置里那个开关就是干这个的）
+  await page.evaluate(() => { globalThis.__dshSessionEater.setConfig({ confirm: { enabled: false } }) })
+  await new Promise((r) => setTimeout(r, 300))
+  const callsBefore = await page.evaluate(() => window.__eaterCalls.length)
+  await armAndDrop()
+  const withoutConfirm = await page.evaluate((before) => ({
+    dialog: document.querySelector('.dse-confirm') !== null,
+    grew: window.__eaterCalls.length > before,
+    stored: JSON.parse(window.localStorage.getItem('dsh-session-eater/config') || '{}')?.confirm?.enabled
+  }), callsBefore)
+  report.step('关掉开关后：松手立即删除、不再弹确认',
+    withoutConfirm.dialog === false && withoutConfirm.grew === true && withoutConfirm.stored === false,
+    JSON.stringify(withoutConfirm))
+  // 还原，别把配置留在"关"的状态影响后面的用例
+  await page.evaluate(() => { globalThis.__dshSessionEater.setConfig({ confirm: { enabled: true } }) })
+
+  // ── 侧边栏撤销按钮：必须**不存在** ──────────────────────────────────
+  // 它读的是 localStorage 台账，而台账本来就要跨刷新保留 —— 于是刷新/重启后那个
+  // 按钮一直挂在那儿，用户看到的就是"删不掉的撤销按钮"。现在撤掉它：
+  // 撤销只走回执（内存态，刷新即消失）和设置里的 12 条台账。
   const bar = await page.evaluate(() => {
     const foot = document.querySelector('.dse-foot')
-    const head = document.querySelector('.dse-pill-head')
-    const undo = document.querySelector('.dse-undo')
-    if (!foot || !head || !undo) return { missing: true, foot: foot !== null, head: head !== null, undo: undo !== null }
-    const f = foot.getBoundingClientRect()
-    const h = head.getBoundingClientRect()
-    const u = undo.getBoundingClientRect()
-    const centerY = (r) => Math.round(r.top + r.height / 2)
+    const pill = document.querySelector('.dse-pill')
     return {
-      label: undo.textContent.trim(),
-      title: undo.getAttribute('title'),
-      sameRow: Math.abs(centerY(h) - centerY(u)) <= 2,
-      rightAligned: f.right - u.right <= 2,
-      toTheRightOfIcon: u.left > h.left,
-      insideViewport: u.left >= 0 && u.right <= window.innerWidth,
-      rect: [Math.round(u.x), Math.round(u.y), Math.round(u.width), Math.round(u.height)],
-      iconRect: [Math.round(h.x), Math.round(h.y), Math.round(h.width), Math.round(h.height)]
+      hasUndo: document.querySelector('.dse-undo') !== null
+        || document.querySelector('[data-role="sidebar-undo"]') !== null,
+      hasFoot: foot !== null,
+      hasPill: pill !== null,
+      children: foot ? foot.children.length : -1,
+      ledgerSize: (globalThis.__dshSessionEater?.lastEaten?.() ?? []).length
     }
   })
-  console.log('sidebar undo bar:', JSON.stringify(bar))
-  report.step('药丸行右侧出现撤销按钮', bar.missing !== true, JSON.stringify(bar.rect))
-  report.step('与图标同一行（垂直居中对齐）', bar.sameRow === true,
-    `icon=${JSON.stringify(bar.iconRect)} undo=${JSON.stringify(bar.rect)}`)
-  report.step('贴在药丸行最右侧且在视口内', bar.rightAligned === true && bar.insideViewport === true)
-  report.step('按钮文案用「撤销按钮」那段自定义文案', bar.label === '撤销', String(bar.label))
+  console.log('sidebar foot:', JSON.stringify(bar))
+  report.step('台账里有记录时，侧边栏也不再有撤销按钮',
+    bar.hasUndo === false && bar.hasFoot && bar.hasPill && bar.ledgerSize > 0,
+    JSON.stringify(bar))
+  report.step('药丸行只剩药丸一个子元素', bar.children === 1, String(bar.children))
 
-  // 点它必须真的调 /restore（fetch 已打桩，不会碰真数据）。
+  // 回执上的撤销仍然必须真的调 /restore（fetch 已打桩，不会碰真数据）。
   // 注意：撤销成功后插件会 location.reload()，那会把 window.__eaterCalls 清掉，
   // 所以必须在刷新之前把调用抓下来。
-  await page.click('.dse-undo')
+  await page.click('.dse-toast button[data-role="undo"]')
   const restoreCall = await page.evaluate(async () => {
     const deadline = Date.now() + 600
     while (Date.now() < deadline) {
@@ -210,7 +305,7 @@ try {
     return window.__eaterCalls.slice(-3)
   })
   console.log('restore calls:', JSON.stringify(restoreCall))
-  report.step('点侧边栏撤销会调 /dsh-session-eater/restore',
+  report.step('点回执里的撤销会调 /dsh-session-eater/restore',
     restoreCall.some((c) => c.url.includes('/restore') && c.method === 'POST'),
     JSON.stringify(restoreCall))
 
