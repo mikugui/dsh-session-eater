@@ -101,9 +101,12 @@ console.log(`\n简介（旧）: ${before.description ?? '(空)'}`)
 
 const after = await api(token, 'PATCH', `/repos/${owner}/${REPO}`, {
   description: ABOUT,
-  homepage: HOMEPAGE,
-  topics: TOPICS_WANTED
+  homepage: HOMEPAGE
 })
 console.log(`简介（现）: ${after.description ?? '(空)'}`)
-console.log(`topics    : ${(after.topics ?? []).join(', ')}`)
+
+// topics 走专用接口：PATCH 仓库时带 topics 只生效了一部分（实测 5 个只落下 3 个，
+// `session` / `cleanup` 被吞掉了），PUT /topics 才是整组替换的那一个。
+const topicsAfter = await api(token, 'PUT', `/repos/${owner}/${REPO}/topics`, { names: TOPICS_WANTED })
+console.log(`topics    : ${(topicsAfter.names ?? []).join(', ')}`)
 console.log('\n✅ 已更新')
