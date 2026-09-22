@@ -261,7 +261,7 @@ try {
     && folded.eaten?.open === false && folded.eaten?.body === false,
     JSON.stringify(folded))
   report.step('收起时标题右侧给出条数摘要',
-    folded.text?.summary === '15 段' && (folded.eaten?.summary === '空' || /条$/.test(folded.eaten?.summary ?? '')),
+    /^\d+ 段$/.test(folded.text?.summary ?? '') && (folded.eaten?.summary === '空' || /条$/.test(folded.eaten?.summary ?? '')),
     `文案=${folded.text?.summary} 最近吃掉=${folded.eaten?.summary}`)
 
   await setFold('text', true)
@@ -274,7 +274,13 @@ try {
 
   const textFields = await page.evaluate(() => [...document.querySelectorAll('.dse-cfg-field-label')]
     .map((el) => el.textContent.trim()))
-  report.step('设置页里有全部文案输入框', textFields.length >= 15, `${textFields.length} 项: ${textFields.slice(0, 4).join('/')}…`)
+  report.step('设置页里有全部文案输入框', textFields.length >= 16, `${textFields.length} 项: ${textFields.slice(0, 4).join('/')}…`)
+  report.step('摘要里的段数与实际输入框数量一致',
+    folded.text?.summary === `${textFields.length} 段`,
+    `摘要=${folded.text?.summary} 实际=${textFields.length}`)
+  report.step('确认弹窗那两段标题（带用量 / 不带用量）都在',
+    textFields.includes('确认弹窗标题') && textFields.includes('确认弹窗标题（带用量）'),
+    textFields.filter((t) => t.includes('确认弹窗标题')).join(' / '))
   report.step('确认弹窗那三段文案也能改',
     textFields.includes('确认弹窗标题') && textFields.includes('确认弹窗：确定') && textFields.includes('确认弹窗：取消'),
     textFields.filter((t) => t.startsWith('确认弹窗')).join(' / '))

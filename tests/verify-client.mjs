@@ -35,8 +35,23 @@ try {
       const url = typeof input === 'string' ? input : (input && input.url) || ''
       if (url.includes('/dsh-session-eater/')) {
         window.__eaterCalls.push({ url, method: (init && init.method) || 'GET', body: init && init.body })
+        // /usage 要回一份"像真的"的用量：确认弹窗会把 total 格式化成 1.2M 写进询问语，
+        // 元信息行再拼上轮数和缓存命中占比。写死一份，断言才有确定值可比。
+        const payload = url.includes('/usage')
+          ? {
+            ok: true,
+            sessionId: 'intercepted',
+            total: 1234567,
+            uncachedInputTokens: 20000,
+            outputTokens: 14567,
+            cacheReadTokens: 1200000,
+            cacheWriteTokens: 0,
+            turns: 42,
+            steps: 100
+          }
+          : { ok: true, sessionId: 'intercepted', moved: ['<intercepted>'] }
         return Promise.resolve(new Response(
-          JSON.stringify({ ok: true, sessionId: 'intercepted', moved: ['<intercepted>'] }),
+          JSON.stringify(payload),
           { status: 200, headers: { 'content-type': 'application/json' } }
         ))
       }
@@ -171,6 +186,7 @@ try {
       exists: box !== null,
       ask: box ? box.querySelector('.dse-confirm-ask')?.textContent.trim() : null,
       who: box ? box.querySelector('.dse-confirm-who')?.textContent.trim() : null,
+      meta: box ? (box.querySelector('.dse-confirm-meta')?.textContent.trim() ?? null) : null,
       yes: box ? box.querySelector('[data-role="confirm-ok"]')?.textContent.trim() : null,
       no: box ? box.querySelector('[data-role="confirm-cancel"]')?.textContent.trim() : null,
       focused: document.activeElement ? document.activeElement.getAttribute('data-role') : null,
@@ -193,8 +209,15 @@ try {
   report.step('确认框落在投放区里（即左侧会话列表内）',
     dialog.insidePlate === true && dialog.plateInLeftColumn === true, JSON.stringify(dialog.rects))
   report.step('确认框问清楚是哪条会话、并给出两个按钮',
-    String(dialog.ask || '').includes('确定要删除') && dialog.who === SESSION
+    String(dialog.ask || '').includes('确定要吃掉') && dialog.who === SESSION
     && dialog.yes === '删除' && dialog.no === '取消', JSON.stringify(dialog))
+  // 询问语里的 token 数：桩返回 total=1234567 → 应写成「1.2M」；
+  // 元信息行再拼上轮数与缓存命中占比（1200000/1234567 ≈ 97%）
+  report.step('询问语里写出了这个会话消耗的 token 数',
+    String(dialog.ask || '').includes('1.2M token'), String(dialog.ask))
+  report.step('副信息行给出轮数与缓存命中占比',
+    String(dialog.meta || '').includes('42 轮') && String(dialog.meta || '').includes('97%'),
+    String(dialog.meta))
   report.step('默认焦点在「取消」上（回车不该误删）', dialog.focused === 'confirm-cancel', String(dialog.focused))
   await page.screenshot({ path: fileURLToPath(new URL('../docs/confirm.png', import.meta.url)) })
 
