@@ -185,8 +185,17 @@ try {
     return {
       exists: box !== null,
       ask: box ? box.querySelector('.dse-confirm-ask')?.textContent.trim() : null,
-      who: box ? box.querySelector('.dse-confirm-who')?.textContent.trim() : null,
-      meta: box ? (box.querySelector('.dse-confirm-meta')?.textContent.trim() ?? null) : null,
+      text: box ? box.textContent.trim() : null,
+      parts: box ? [...box.children].map((el) => String(el.className)) : [],
+      eager: document.querySelector('.dse-pet')?.dataset.eager ?? null,
+      mouthOpacity: (() => {
+        const m = document.querySelector('.dse-plate .dse-mouth')
+        return m ? getComputedStyle(m).opacity : null
+      })(),
+      mouthAnimation: (() => {
+        const m = document.querySelector('.dse-plate .dse-mouth')
+        return m ? getComputedStyle(m).animationName : null
+      })(),
       yes: box ? box.querySelector('[data-role="confirm-ok"]')?.textContent.trim() : null,
       no: box ? box.querySelector('[data-role="confirm-cancel"]')?.textContent.trim() : null,
       focused: document.activeElement ? document.activeElement.getAttribute('data-role') : null,
@@ -208,16 +217,22 @@ try {
     dialog.exists === true && dialog.calls === 0, JSON.stringify(dialog))
   report.step('确认框落在投放区里（即左侧会话列表内）',
     dialog.insidePlate === true && dialog.plateInLeftColumn === true, JSON.stringify(dialog.rects))
-  report.step('确认框问清楚是哪条会话、并给出两个按钮',
-    String(dialog.ask || '').includes('确定要吃掉') && dialog.who === SESSION
+  report.step('确认框只问一句 + 两个按钮',
+    String(dialog.ask || '').includes('真的给我吃吗')
     && dialog.yes === '删除' && dialog.no === '取消', JSON.stringify(dialog))
-  // 询问语里的 token 数：桩返回 total=1234567 → 应写成「1.2M」；
-  // 元信息行再拼上轮数与缓存命中占比（1200000/1234567 ≈ 97%）
+  // 询问语里的 token 数：桩返回 total=1234567 → 应写成「1.2M」
   report.step('询问语里写出了这个会话消耗的 token 数',
     String(dialog.ask || '').includes('1.2M token'), String(dialog.ask))
-  report.step('副信息行给出轮数与缓存命中占比',
-    String(dialog.meta || '').includes('42 轮') && String(dialog.meta || '').includes('97%'),
-    String(dialog.meta))
+  // 弹窗要够小：正文只有"询问语"和"按钮行"两个子元素 —— 会话名/轮数/命中率都不该再出现
+  report.step('弹窗里没有会话名、轮数、缓存命中率',
+    dialog.parts.length === 2 && dialog.parts[0] === 'dse-confirm-ask'
+    && !/session-|轮|缓存命中/.test(dialog.text ?? ''),
+    JSON.stringify({ parts: dialog.parts, text: dialog.text }))
+  // 确认期间鱼要是"张嘴渴望"：嘴张着（opacity 1）且**不在咀嚼**（animationName 为 none），
+  // 跟悬停时那种 dse-chew 明确区分开。
+  report.step('确认期间大肥鱼张嘴渴望（嘴不动、不是咀嚼）',
+    dialog.eager === 'true' && Number(dialog.mouthOpacity) > 0.5 && dialog.mouthAnimation === 'none',
+    JSON.stringify({ eager: dialog.eager, opacity: dialog.mouthOpacity, animation: dialog.mouthAnimation }))
   report.step('默认焦点在「取消」上（回车不该误删）', dialog.focused === 'confirm-cancel', String(dialog.focused))
   await page.screenshot({ path: fileURLToPath(new URL('../docs/confirm.png', import.meta.url)) })
 
