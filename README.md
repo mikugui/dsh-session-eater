@@ -437,6 +437,23 @@ Compress-Archive -Path .\* -DestinationPath ..\dsh-session-eater-<version>.zip
 > ⚠️ **令牌请用 classic + 只勾 `repo`**。fine-grained 令牌**建不了仓库**
 > （`POST /user/repos` 会回 403 `Resource not accessible by personal access token`）。
 
+**两个实测踩过的坑（脚本已经各自兜住，但值得知道）**
+
+1. **`latest/download/<name>.tgz` 的名字不能立刻复用**。附件名是仓库级唯一的，发新版时脚本会
+   把它从旧 Release 上摘下来再传到新 Release —— 但 GitHub 的删除**不是立刻生效**的，
+   刚摘完就传会回 `422 already_exists`（v0.6.0 实测：Release 都发出去了，这个附件还空着）。
+   现在脚本会带重试（最多 6 次 × 10 秒，每次重试前再摘一遍）。
+2. **投稿用的 fork 会过期，而过期的 fork 会让 PR 变 `dirty`**。fork 落后上游之后：
+   - 直接拿上游 main 的 sha 在 fork 上建 ref 会 `404 Not Found`（那个提交不在 fork 的对象库里）；
+   - 退用 fork 自己的 main 又能建 ref，但那个 base 里**还没有我们的条目文件**，
+     于是新分支"新增"了一个上游已存在的文件 → add/add 冲突，PR 合不了。
+   脚本会先试 `merge-upstream` 同步 fork；本机这条**必然失败**，因为上游带
+   `.github/workflows/build-site.yml`，而 classic 令牌没有 `workflow` 权限
+   （`422 refusing to allow a Personal Access Token to create or update workflow`）。
+   失败后脚本会退到「**上游最后一次改过本条目文件的提交**」当 base：它一定含这个文件
+   （diff 只剩我们这次的改动），而且是上游 main 的干净祖先（`behind=0`）。
+   想彻底省掉这个回退，给令牌补一个 `workflow` 勾选即可（**令牌字符串不变，不用重新粘**）。
+
 **发版清单**
 
 1. 改 `package.json` 的 `version`

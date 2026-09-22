@@ -210,17 +210,64 @@ if (!flag('--skip-fork')) {
   }
 }
 
-const base = await api(token, 'GET', `/repos/${TARGET.owner}/${TARGET.repo}/git/ref/heads/main`)
-const baseSha = base.object.sha
-console.log(`目标 main   : ${baseSha.slice(0, 8)}`)
+const upstreamRef = await api(token, 'GET', `/repos/${TARGET.owner}/${TARGET.repo}/git/ref/heads/main`)
+const upstreamSha = upstreamRef.object.sha
 
-try {
-  await api(token, 'POST', `/repos/${forkFull}/git/refs`, { ref: `refs/heads/${BRANCH}`, sha: baseSha })
-  console.log(`已建分支    : ${BRANCH}`)
-} catch (error) {
-  if (error.status !== 422) throw error
-  console.log(`分支已存在  : ${BRANCH}（将覆盖提交）`)
+/**
+ * 分支该挂在哪个提交上。
+ *
+ * 这一块是踩了两次坑之后写的：
+ * 1. 直接拿**上游 main 的 sha** 去 fork 上建 ref，可能回 404 Not Found —— 那个提交不在
+ *    fork 自己的对象库里（这次就是这样）。上一次投稿能成，只因那会儿 fork 刚建好、和上游同一个提交。
+ * 2. 退而用 **fork 自己的 main**（落后上游 229 个提交），虽然能建 ref，但那个 base 里
+ *    **还没有我们的条目文件**，于是新分支"新增"了一个上游已存在的文件 → add/add 冲突，
+ *    PR 直接是 dirty、合不了。
+ *
+ * 所以优先同步 fork；同步不了（本机就是：merge-upstream 要动上游的 workflow 文件，
+ * classic 令牌没有 `workflow` 权限 → 422），就退到**上游最后一次改过本条目文件的那个提交** ——
+ * 它一定含这个文件（于是 diff 只有我们这次的改动）、而且是上游 main 的干净祖先（behind=0）。
+ */
+const forkRefBefore = await api(token, 'GET', `/repos/${forkFull}/git/ref/heads/main`)
+let baseSha = forkRefBefore.object.sha
+let baseNote = ''
+if (baseSha !== upstreamSha) {
+  console.log(`fork 落后   : ${baseSha.slice(0, 8)} → 上游 ${upstreamSha.slice(0, 8)}，先试着同步`)
+  const synced = await api(token, 'POST', `/repos/${forkFull}/merge-upstream`, { branch: 'main' })
+    .catch((error) => {
+      if (error.status === 409 || error.status === 422) return { failed: error }
+      throw error
+    })
+  if (synced.failed === undefined) {
+    baseSha = (await api(token, 'GET', `/repos/${forkFull}/git/ref/heads/main`)).object.sha
+    console.log(`已同步      : ${synced.merge_type ?? 'fast-forward'} → ${baseSha.slice(0, 8)}`)
+  } else {
+    console.log(`同步失败    : ${synced.failed.status} ${synced.failed.detail?.message ?? ''}`)
+    const touched = await api(token, 'GET',
+      `/repos/${TARGET.owner}/${TARGET.repo}/commits?path=${ENTRY_PATH}&per_page=1`)
+    if (Array.isArray(touched) && touched[0]?.sha !== undefined) {
+      baseSha = touched[0].sha
+      baseNote = '（改用上游最后一次改本条目的提交，保证 diff 干净）'
+      console.log(`改挂 base   : ${baseSha.slice(0, 8)} ${baseNote}`)
+    } else {
+      console.log(`提示        : 上游还没有这个条目文件，只能挂在 fork 的 main 上（首次投稿时正常）`)
+    }
+  }
 }
+
+console.log(`目标 base   : ${baseSha.slice(0, 8)}${baseSha === upstreamSha ? '（与上游 main 一致）' : `（上游 main 是 ${upstreamSha.slice(0, 8)}）`}`)
+
+// 分支一定要**重新**从当前 base 拉一遍。
+// 踩过：fork 上一次同步前建的分支还挂在老 base 上，那个 base 里**没有**我们的条目文件，
+// 于是新分支"新增"了一个上游已经存在的文件 —— add/add 冲突，PR 直接显示 dirty、合不了。
+// 我们的分支本来就是脚本一次性生成的，删掉重建最省事也最确定。
+try {
+  await api(token, 'DELETE', `/repos/${forkFull}/git/refs/heads/${BRANCH}`)
+  console.log(`删旧分支    : ${BRANCH}（只重建，免得挂在过期的 base 上）`)
+} catch (error) {
+  if (error.status !== 404 && error.status !== 422) throw error
+}
+await api(token, 'POST', `/repos/${forkFull}/git/refs`, { ref: `refs/heads/${BRANCH}`, sha: baseSha })
+console.log(`已建分支    : ${BRANCH} ← ${baseSha.slice(0, 8)}`)
 
 // 文件已存在时要用它的 sha 才能更新
 let existingSha

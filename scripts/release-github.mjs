@@ -203,20 +203,42 @@ const stableSource = assets.find((file) => file.endsWith('.tgz'))
 if (stableSource === undefined) {
   console.log(`提示     : 没有 tgz，跳过 ${stableName}`)
 } else {
-  const allReleases = await api(token, 'GET', `/repos/${owner}/${REPO}/releases`)
-  for (const release of allReleases) {
-    if (release.tag_name === TAG) continue
-    for (const asset of release.assets ?? []) {
-      if (asset.name !== stableName) continue
-      await api(token, 'DELETE', `/repos/${owner}/${REPO}/releases/assets/${asset.id}`)
-      console.log(`腾名字   : 从 ${release.tag_name} 摘掉 ${stableName}（仓库级唯一，先让它空出来）`)
+  /** 再扫一遍所有 Release，把占着 stableName 的那个附件摘掉。返回摘掉了几个。 */
+  const freeTheName = async () => {
+    const allReleases = await api(token, 'GET', `/repos/${owner}/${REPO}/releases`)
+    let removed = 0
+    for (const release of allReleases) {
+      if (release.tag_name === TAG) continue
+      for (const asset of release.assets ?? []) {
+        if (asset.name !== stableName) continue
+        await api(token, 'DELETE', `/repos/${owner}/${REPO}/releases/assets/${asset.id}`)
+        console.log(`腾名字   : 从 ${release.tag_name} 摘掉 ${stableName}（仓库级唯一，先让它空出来）`)
+        removed += 1
+      }
     }
+    return removed
   }
+
+  await freeTheName()
   const stillThere = (existingRelease.assets ?? []).some((asset) => asset.name === stableName)
   if (stillThere) {
     console.log(`跳过     : ${stableName}（这个 Release 已经有了）`)
   } else {
-    const asset = await uploadAsset(token, owner, REPO, existingRelease.id, stableSource, stableName)
+    // ⚠️ DELETE 之后**名字不是立刻可复用**的：GitHub 的附件名唯一性索引有几十秒的延迟，
+    //    刚摘完就传会回 422 already_exists（v0.6.0 实测踩到，release 已经发出去、附件却缺一个）。
+    //    所以这里带重试：每次失败先确认名字真的空着，再等一会儿重传。
+    let asset = null
+    for (let attempt = 1; attempt <= 6 && asset === null; attempt += 1) {
+      try {
+        asset = await uploadAsset(token, owner, REPO, existingRelease.id, stableSource, stableName)
+      } catch (error) {
+        const alreadyThere = error.status === 422 && (error.detail?.errors ?? []).some((e) => e.code === 'already_exists')
+        if (!alreadyThere || attempt === 6) throw error
+        console.log(`等一下   : 名字还没释放（422 already_exists，第 ${attempt} 次），10 秒后重试`)
+        await new Promise((resolve) => setTimeout(resolve, 10000))
+        await freeTheName()
+      }
+    }
     console.log(`已上传   : ${asset.name}  ${(asset.size / 1024).toFixed(1)} KB  ← 市场 latest/download 靠它`)
   }
 }
