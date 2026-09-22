@@ -396,7 +396,18 @@ try {
     await new Promise((r) => setTimeout(r, 900))
     const blankResult = await page.evaluate(() => ({
       calls: window.__eaterCalls,
-      toast: document.querySelector('.dse-toast')?.textContent.trim() ?? null
+      toast: document.querySelector('.dse-toast')?.textContent.trim() ?? null,
+      blocked: document.querySelector('.dse-plate')?.dataset.blocked ?? null,
+      note: document.querySelector('.dse-plate-note')?.textContent.trim() ?? null,
+      plateRed: (() => {
+        const p = document.querySelector('.dse-plate')
+        if (p === null) return null
+        return getComputedStyle(p).borderTopColor === 'rgb(229, 72, 77)'
+      })(),
+      mouthOpacity: (() => {
+        const m = document.querySelector('.dse-plate .dse-mouth')
+        return m ? getComputedStyle(m).opacity : null
+      })()
     }))
     console.log('blank drop:', JSON.stringify(blankResult))
     report.step('拖空白会话也能武装投放区', armedForBlank)
@@ -404,8 +415,89 @@ try {
       `calls=${blankResult.calls.length}`)
     report.step('空白会话给出解释', String(blankResult.toast || '').includes('空白会话'),
       String(blankResult.toast))
+    report.step('拒绝时投放区变红并写出原因（不只靠底部 toast）',
+      blankResult.blocked === 'true' && String(blankResult.note || '').includes('空白会话')
+      && blankResult.plateRed === true, JSON.stringify(blankResult))
+    report.step('拒绝时鱼闭着嘴（不摆出要吃的张嘴样子）',
+      blankResult.mouthOpacity === '0', String(blankResult.mouthOpacity))
   } else {
     console.log('SKIP  当前没有空白会话可测')
+  }
+
+  // ── 拖「正在聊的这个会话」：必须就地拒绝、不能只是静默 ────────────────
+  // 用户报的现象：把正打开的对话拖到鱼身上，鱼吃不掉，而且只有屏幕底部一条 6 秒 toast
+  // （眼睛盯着左上角的鱼，很容易漏掉，看着就像"点了没反应"）。
+  // 测试浏览器默认开着一个空白「新会话」，而"正在聊的那个"必须是非空白会话才测得到 ——
+  // 先点开一条有内容的会话，让它成为 current。
+  const opened = await page.evaluate(async () => {
+    const rows = [...document.querySelectorAll("[class*='sessionRow']")]
+    const row = rows.find((el) => el.querySelector("[class*='rowActions']"))
+    if (!row) return { ok: false, reason: 'no non-blank row' }
+    row.click()
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const cur = globalThis.__dshSessionEater.current()
+      if (cur !== '' && globalThis.__dshSessionEater.isBlank(cur) !== true) return { ok: true, current: cur }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    return { ok: false, reason: 'current 没变成非空白会话', current: globalThis.__dshSessionEater.current() }
+  })
+  console.log('opened session:', JSON.stringify(opened))
+  const currentId = opened.ok === true ? opened.current : await page.evaluate(() => globalThis.__dshSessionEater.current())
+  const currentBlank = opened.ok === true ? false
+    : await page.evaluate((sid) => globalThis.__dshSessionEater.isBlank(sid), currentId)
+  if (currentId === '' || currentBlank === true) {
+    console.log(`SKIP  拿不到非空白的当前会话（${currentId || 'none'}），"正在聊的那个"这条用例跳过`)
+  } else {
+    await page.evaluate((sid) => {
+      window.__eaterCalls.length = 0
+      const rows = [...document.querySelectorAll("[class*='sessionRow']")]
+      const row = rows.find((el) => el.querySelector("[class*='rowActions']")) ?? rows[0]
+      row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: window.__dt(sid) }))
+    }, currentId)
+    await new Promise((r) => setTimeout(r, 400))
+    // 悬停在鱼头上：这时就该有醒目反馈（而不是等松手）
+    await page.evaluate((sid) => {
+      const plate = document.querySelector('.dse-plate')
+      const dt = window.__dt(sid)
+      plate.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }))
+      plate.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    }, currentId)
+    await new Promise((r) => setTimeout(r, 400))
+    const hoverRefuse = await page.evaluate(() => ({
+      blocked: document.querySelector('.dse-plate')?.dataset.blocked ?? null,
+      note: document.querySelector('.dse-plate-note')?.textContent.trim() ?? null,
+      mouthOpacity: (() => {
+        const m = document.querySelector('.dse-plate .dse-mouth')
+        return m ? getComputedStyle(m).opacity : null
+      })()
+    }))
+    console.log('hover refuse:', JSON.stringify(hoverRefuse))
+    report.step('悬停就提示"不能吃"：投放区变红 + 写出原因',
+      hoverRefuse.blocked === 'true' && String(hoverRefuse.note || '').includes('正在聊'),
+      JSON.stringify(hoverRefuse))
+    report.step('悬停时就闭嘴（不装出要吃的样子）', hoverRefuse.mouthOpacity === '0', String(hoverRefuse.mouthOpacity))
+
+    // 松手：阶段停在 refused（晃两下）、不发删除请求、底部仍补一条 toast
+    await page.evaluate((sid) => {
+      const plate = document.querySelector('.dse-plate')
+      plate.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt(sid) }))
+    }, currentId)
+    await new Promise((r) => setTimeout(r, 400))
+    const refused = await page.evaluate(() => ({
+      phase: document.querySelector('.dse-plate')?.dataset.phase ?? null,
+      blocked: document.querySelector('.dse-plate')?.dataset.blocked ?? null,
+      note: document.querySelector('.dse-plate-note')?.textContent.trim() ?? null,
+      toast: document.querySelector('.dse-toast')?.textContent.trim() ?? null,
+      calls: window.__eaterCalls.filter((c) => /\/(delete|restore)$/.test(c.url)).length
+    }))
+    console.log('current drop refused:', JSON.stringify(refused))
+    report.step('松手被拒：停在 refused 阶段并写清原因、且不发删除请求',
+      refused.phase === 'refused' && refused.blocked === 'true'
+      && String(refused.note || '').includes('正在聊') && refused.calls === 0,
+      JSON.stringify(refused))
+    report.step('被拒时底部也补一条 toast（双通道）',
+      String(refused.toast || '').includes('正在聊'), String(refused.toast))
   }
 
   // ── 台账里的会话必须从「单列表」视图里消失 ──────────────────────────
