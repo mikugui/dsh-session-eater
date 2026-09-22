@@ -31,10 +31,18 @@ try {
       return dt
     }
     const original = window.fetch.bind(window)
+    // 需要时把 /delete 变成"宿主拒绝"（模拟 409 session-running：会话正在跑）
+    window.__refuseDelete = false
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input && input.url) || ''
       if (url.includes('/dsh-session-eater/')) {
         window.__eaterCalls.push({ url, method: (init && init.method) || 'GET', body: init && init.body })
+        if (window.__refuseDelete === true && url.includes('/delete')) {
+          return Promise.resolve(new Response(
+            JSON.stringify({ ok: false, code: 'session-running', error: '该会话正在运行，先停止它再喂鱼' }),
+            { status: 409, headers: { 'content-type': 'application/json' } }
+          ))
+        }
         // /usage 要回一份"像真的"的用量：确认弹窗会把 total 格式化成 1.2M 写进询问语，
         // 元信息行再拼上轮数和缓存命中占比。写死一份，断言才有确定值可比。
         const payload = url.includes('/usage')
@@ -541,6 +549,79 @@ try {
       `「${victim.title}」 ${flatBefore.length} → ${flatAfter.length} 行`)
     await page.evaluate(() => window.localStorage.removeItem('dsh-session-eater/eaten'))
   }
+  // ── 宿主说"这条还在跑"（409 session-running）：也要走就地拒绝 ──────────
+  // 以前它走的是普通失败回执（"没吃下去：该会话正在运行…"）—— 单看像是插件坏了；
+  // 其实它和"空白会话 / 正在聊的这个"一样都是"不能吃"，反馈风格应当一致：
+  // 投放区变红 + 写清原因 + 松手摇头，而不是当错误报。
+  // 放在最后：这一条会顶掉前面那枚带撤销的持久回执，不适合插在中间。
+  const runningVictim = await page.evaluate(() => {
+    const probe = globalThis.__dshSessionEater?.sessionsProbe?.()
+    const found = (probe?.summaries ?? []).find((s) => s.id !== probe.current && s.blank !== true)
+    return found ? found.id : null
+  })
+  if (runningVictim === null) {
+    console.log('SKIP  没有可用于 409 用例的非当前会话')
+  } else {
+    await page.evaluate(() => { window.__refuseDelete = true })
+    const dragTo = async (sid) => {
+      await page.evaluate((id) => {
+        const rows = [...document.querySelectorAll("[class*='sessionRow']")]
+        const row = rows.find((el) => !/selected/i.test(el.className) && el.querySelector("[class*='rowActions']"))
+          ?? rows[0]
+        row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: window.__dt(id) }))
+      }, sid)
+      await new Promise((r) => setTimeout(r, 350))
+      await page.evaluate((id) => {
+        const plate = document.querySelector('.dse-plate')
+        const dt = window.__dt(id)
+        plate.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        plate.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+      }, sid)
+      await new Promise((r) => setTimeout(r, 400))
+      await page.evaluate((id) => {
+        const plate = document.querySelector('.dse-plate')
+        plate.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt(id) }))
+      }, sid)
+      await new Promise((r) => setTimeout(r, 600))
+    }
+    const callsBeforeRefuse = await page.evaluate(() => window.__eaterCalls.length)
+    await dragTo(runningVictim)
+    // 确认框应该照常弹（这条会话本身是可吃的），点了「删除」才轮到宿主回 409
+    const askedFirst = await page.evaluate(() => document.querySelector('[data-role="confirm-ok"]') !== null)
+    report.step('409 用例前置：这条会话先正常弹确认框', askedFirst === true, String(askedFirst))
+    await page.click('[data-role="confirm-ok"]')
+    await new Promise((r) => setTimeout(r, 900))
+    const running = await page.evaluate((before) => ({
+      phase: document.querySelector('.dse-plate')?.dataset.phase ?? null,
+      blocked: document.querySelector('.dse-plate')?.dataset.blocked ?? null,
+      note: document.querySelector('.dse-plate-note')?.textContent.trim() ?? null,
+      toast: document.querySelector('.dse-toast')?.textContent.trim() ?? null,
+      sentDelete: window.__eaterCalls.slice(before).some((c) => c.url.includes('/delete')),
+      mouthOpacity: (() => {
+        const m = document.querySelector('.dse-plate .dse-mouth')
+        return m ? getComputedStyle(m).opacity : null
+      })()
+    }), callsBeforeRefuse)
+    console.log('running refusal:', JSON.stringify(running))
+    report.step('宿主 409（会话还在跑）：也走就地拒绝、写清原因',
+      running.sentDelete === true && running.phase === 'refused' && running.blocked === 'true'
+      && String(running.note || '').includes('还在跑') && running.mouthOpacity === '0',
+      JSON.stringify(running))
+    report.step('409 不混进"没吃下去"那类失败回执',
+      String(running.toast || '').includes('还在跑') && !String(running.toast || '').includes('没吃下去'),
+      String(running.toast))
+
+    // 归位：1.8 秒后自己回到 idle（顺带验证 setTimeout 里读到的是活 state，不是闭包快照）
+    await new Promise((r) => setTimeout(r, 2200))
+    const settled = await page.evaluate(() => ({
+      plate: document.querySelector('.dse-plate') !== null,
+      phase: document.querySelector('.dse-plate')?.dataset.phase ?? null
+    }))
+    report.step('被拒 1.8 秒后自己归位（投放区收起）',
+      settled.plate === false || settled.phase === 'idle', JSON.stringify(settled))
+    await page.evaluate(() => { window.__refuseDelete = false })
+  }
+
 } finally {
   await browser.close().catch(() => {})
 }
